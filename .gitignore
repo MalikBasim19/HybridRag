@@ -1,8 +1,6 @@
-# Secrets and local configuration (keep shareable examples)
+# Secrets and local configuration (including example files)
 .env
 .env.*
-!.env.example
-!.env.*.example
 .aws/
 *.pem
 *.key
