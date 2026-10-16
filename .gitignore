@@ -1,6 +1,5 @@
 # Secrets and local configuration (including example files)
 .env
-.env.*
 .aws/
 *.pem
 *.key
