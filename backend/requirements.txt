@@ -1,0 +1,7 @@
+-r requirements-core.txt
+# Matched pair: torch 2.6 CPU raises during Transformers accelerator detection.
+# Preinstall CPU wheels using requirements-cpu.txt on Linux/Windows.
+torch==2.7.1
+torchvision==0.22.1
+transformers==5.19.0
+docling==2.139.0
