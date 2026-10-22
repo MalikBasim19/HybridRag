@@ -5,13 +5,14 @@ from .rag.extraction import extract
 from .rag.chunking import chunk
 from .rag.bm25 import build_bm25
 from .rag.retriever import hybrid
-from .rag.generation import generate
+from .rag.generation import generate, stream_generate
 
 log = logging.getLogger(__name__)
 class Service:
-    def __init__(self, settings, vectors, extractor=extract, generator=generate):
+    def __init__(self, settings, vectors, extractor=extract, generator=generate, stream_generator=stream_generate):
         self.settings, self.vectors = settings, vectors
         self.extractor, self.generator = extractor, generator
+        self.stream_generator = stream_generator
         self.lock = vectors.lock
         self.repo = Repository(settings.storage / 'corpus.sqlite3')
         self.pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix='ingestion')
@@ -61,7 +62,7 @@ class Service:
             self.repo.delete(id)
             self.bm25 = build_bm25(self.repo.corpus())
             (self.settings.storage / 'uploads' / (id+'.pdf')).unlink(missing_ok=True)
-    def chat(self, question):
+    def _retrieve(self, question):
         with self.lock:
             if self.bm25 is None:
                 raise ValueError('Upload and index a PDF before asking a question')
@@ -74,10 +75,25 @@ class Service:
                     used += len(doc.page_content)
             if not selected:
                 raise ValueError('Retrieved tables exceed the context budget; increase MAX_CONTEXT_CHARS')
-        answer = self.generator(self.settings, question, selected)
-        return {'answer': answer, 'sources': [dict(document_id=d.metadata['document_id'], filename=d.metadata['filename'],
+        return selected, {'sources': [dict(document_id=d.metadata['document_id'], filename=d.metadata['filename'],
             chunk_id=d.metadata['chunk_id'], type=d.metadata['type'], pages=d.metadata.get('pages'), snippet=d.page_content) for d in selected],
             'context_limited': len(selected) != len(docs)}
+    def chat(self, question):
+        selected, metadata = self._retrieve(question)
+        return dict(metadata, answer=self.generator(self.settings, question, selected))
+    def stream_chat(self, question):
+        # Retrieve before sending headers so validation errors retain HTTP status codes.
+        selected, metadata = self._retrieve(question)
+        def events():
+            yield dict(metadata, type='sources')
+            stream = self.stream_generator(self.settings, question, selected)
+            try:
+                for text in stream:
+                    yield {'type': 'token', 'text': text}
+            finally:
+                stream.close()
+            yield {'type': 'done'}
+        return events()
     def close(self):
         self.pool.shutdown(wait=True)
         self.vectors.close()

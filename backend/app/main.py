@@ -1,10 +1,12 @@
 import hashlib
+import json
 import logging
 import os
 from uuid import uuid4
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from .config import Settings
 from .service import Service
@@ -92,6 +94,30 @@ def create_app(settings=None, factory=None):
         except Exception:
             logging.exception('Deletion failed')
             raise HTTPException(502, 'Deletion could not finish; restart backend to retry cleanup')
+    @app.post('/api/chat/stream')
+    def stream_chat(body: Question, request: Request):
+        if not body.question.strip():
+            raise HTTPException(422, 'Question cannot be blank')
+        if not settings.openai_api_key:
+            raise HTTPException(503, 'Set OPENAI_API_KEY in backend/.env')
+        try:
+            events = request.app.state.service.stream_chat(body.question.strip())
+        except ValueError as exc:
+            raise HTTPException(409, str(exc))
+        except Exception:
+            logging.exception('Retrieval failed')
+            raise HTTPException(502, 'Retrieval failed; see backend logs')
+        def stream():
+            try:
+                for event in events:
+                    yield f'data: {json.dumps(event)}\n\n'
+            except Exception:
+                logging.exception('Streaming generation failed')
+                yield f'data: {json.dumps({"type": "error", "message": "Answer interrupted; please retry. See backend logs."})}\n\n'
+            finally:
+                events.close()
+        return StreamingResponse(stream(), media_type='text/event-stream',
+            headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
     @app.post('/api/chat')
     def chat(body: Question, request: Request):
         if not body.question.strip():

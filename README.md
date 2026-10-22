@@ -70,6 +70,9 @@ Set `QDRANT_URL=http://localhost:6333` to use a persistent Qdrant server instead
 | GET | `/api/documents` | IDs, filenames, states, errors, chunk counts |
 | DELETE | `/api/documents/{id}` | Delete a terminal-state document; busy documents return 409 |
 | POST | `/api/chat` | JSON `{"question":"..."}`; answer, source objects, context limit flag |
+| POST | `/api/chat/stream` | Same question JSON; SSE events: `sources`, `token` (text), `done`, or `error` (message) |
+
+The React chat uses streaming: retrieval completes first, then model text appears as it arrives. References accompany the answer. An interrupted stream keeps partial text and shows a retry error. The original JSON chat endpoint remains available. Streaming responses disable proxy buffering via `X-Accel-Buffering: no`; any additional reverse proxy must also allow streaming without buffering.
 
 Interactive API documentation: http://localhost:8000/docs. Health does not validate the key with OpenAI. The default limits are 80 files per batch, 50 MB per file, and 8,000 question characters. Starlette parses multipart bodies before endpoint validation, so these limits are local application checks, not an upstream denial-of-service boundary.
 

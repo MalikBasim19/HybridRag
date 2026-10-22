@@ -1,6 +1,6 @@
 import React, {useState, useEffect, useRef} from 'react';
 import {createRoot} from 'react-dom/client';
-import {api} from './api';
+import {api, streamChat} from './api';
 import './style.css';
 
 const preparationStages = ['queued', 'extracting', 'indexing'];
@@ -30,7 +30,9 @@ function App() {
     poll(); const timer = setInterval(poll, 2500);
     return () => {active = false; clearInterval(timer)};
   }, []);
-  useEffect(() => bottom.current?.scrollIntoView({behavior:'smooth'}), [messages, busy]);
+  useEffect(() => {
+    bottom.current?.scrollIntoView({behavior:'smooth'});
+  }, [messages, busy]);
   async function upload(files) {
     if (!files.length) return;
     setUploading(true); setError(''); setNotice('');
@@ -47,11 +49,18 @@ function App() {
   }
   async function ask(e) {
     e.preventDefault(); const text = question.trim(); if(!text || busy) return;
-    setQuestion(''); setError(''); setMessages(m => [...m, {role:'user', text}]); setBusy(true);
+    const id = crypto.randomUUID();
+    setQuestion(''); setError(''); setMessages(m => [...m, {role:'user', text}, {id, role:'assistant', text:'', streaming:true}]); setBusy(true);
+    const update = change => setMessages(m => m.map(message => message.id === id ? change(message) : message));
     try {
-      const result = await api('/api/chat', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({question:text})});
-      setMessages(m => [...m, {role:'assistant', text:result.answer, sources:result.sources, limited:result.context_limited}]);
-    } catch(e) {setError(e.message); setQuestion(text)} finally {setBusy(false)}
+      await streamChat(text, event => {
+        if (event.type === 'sources') update(m => ({...m, sources:event.sources, limited:event.context_limited}));
+        if (event.type === 'token') update(m => ({...m, text:m.text + event.text}));
+      });
+    } catch(e) {
+      setError(e.message); setQuestion(text);
+      update(m => ({...m, text:m.text ? `${m.text}\n\n[Answer interrupted]` : 'Could not generate an answer. Please retry.'}));
+    } finally {update(m => ({...m, streaming:false})); setBusy(false)}
   }
   return <div className="app">
     <aside><a className="brand" href="/">◈ <span>DocLens<span className="brand-dot">.</span></span></a>
@@ -71,7 +80,7 @@ function App() {
       {error && <div className="alert" role="alert">{error}<button onClick={() => setError('')} aria-label="Dismiss error">×</button></div>}
       {notice && <details className="notice"><summary>Upload results</summary><pre>{notice}</pre></details>}
       <div className="conversation" aria-live="polite">{!messages.length && <div className="welcome"><div className="spark">✧</div><span className="section-label">ANSWERS, GROUNDED IN YOUR FILES</span><h2>From pages to perspective.</h2><p>Explore your PDFs with a question.<br/>Get clear answers with the source text close at hand.</p><div className="features"><span>↗ Semantic understanding</span><span>⌕ Exact keyword matching</span><span>▤ Tables preserved</span></div></div>}
-        {messages.map((m,i) => <article key={i} className={`message ${m.role}`}><div className="message-label">{m.role === 'user' ? 'YOU' : '◈ DOCLENS'}</div><div className="answer">{m.text}</div>{m.limited && <p className="muted">Some retrieved chunks exceeded the context budget.</p>}{m.sources && <div className="sources"><span className="section-label">RETRIEVED REFERENCES · {m.sources.length}</span>{m.sources.map((s,j) => <details key={s.chunk_id}><summary>{j+1}. {s.filename} <small>{s.type}{s.pages?.length ? ` · pp. ${s.pages.join(', ')}` : ''}</small></summary><small>Document {s.document_id.slice(0,12)}</small><pre>{s.snippet}</pre></details>)}</div>}</article>)}
+        {messages.map((m,i) => <article key={i} className={`message ${m.role}`}><div className="message-label">{m.role === 'user' ? 'YOU' : '◈ DOCLENS'}</div><div className="answer">{m.text}</div>{!m.streaming && m.limited && <p className="muted">Some retrieved chunks exceeded the context budget.</p>}{!m.streaming && m.sources && <div className="sources"><span className="section-label">RETRIEVED REFERENCES · {m.sources.length}</span>{m.sources.map((s,j) => <details key={s.chunk_id}><summary>{j+1}. {s.filename} <small>{s.type}{s.pages?.length ? ` · pp. ${s.pages.join(', ')}` : ''}</small></summary><small>Document {s.document_id.slice(0,12)}</small><pre>{s.snippet}</pre></details>)}</div>}</article>)}
         {busy && <div className="thinking">Searching your collection and composing an answer…</div>}<div ref={bottom}/>
       </div><div className="composer-wrap"><form className="composer" onSubmit={ask}><label className="sr-only" htmlFor="question">Your question</label><textarea id="question" rows="2" maxLength="8000" placeholder={indexed ? 'Ask a question about your documents…' : uploading || processing.length ? 'Preparing your PDF — questions will unlock when ready…' : 'Upload a PDF to start exploring…'} value={question} disabled={!indexed || !configured} onChange={e => setQuestion(e.target.value)} onKeyDown={e => {if(e.key==='Enter' && !e.shiftKey){e.preventDefault(); ask(e)}}}/><button disabled={!indexed || !configured || busy || !question.trim()} aria-label="Send question">↑</button></form><p>GPT-4.1-mini · Answers use retrieved context. Review references for accuracy.</p></div>
     </main></div>;
